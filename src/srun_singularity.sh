@@ -2,19 +2,17 @@
 
 # to run:
 #     salloc -N 2 -p some_queue  # salloc -N 2 -p hsw_v100
-#     srun ./srun_docker.sh
+#     srun srun_singularity.sh
 
 _basedir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-dockname="${USER}_dock"
+iname="${USER}_sing"
 
 container=""
 
 envlist=""
 
-privileged=false
-
-dockopts=''
+singopts=''
 
 datamnts=""
 
@@ -30,37 +28,51 @@ sshconfigdir="${HOME}/mpisshconfig"
 
 sshdport=12345
 
+
 usage() {
 cat <<EOF
 Usage: $(basename $0) [-h|--help]
-    [--dockname=name] [--container=docker-container] [--datamnts=dir1,dir2,...]
-    [--privileged] [--dockopts="--someopt1=opt1 --someopt2=opt2"]
+    [--iname=name] [--container=singularity-container] [--datamnts=dir1,dir2,...]
+    [--envlist=env1,env2,...] [--singopts="--someopt1=opt1 --someopt2=opt2"]
     [--slots_per_node=somenum]
     [--script=scriptpath] [--<remain_args>]
 
-    SLURM srun launcher script to orchestrate multinode docker jobs. The docker
-    container needs to be built with multinode capabilities. Typically this
-    requires an ssh server and client to be installed in the container. Example:
-        https://github.com/avolkov1/shared_dockerfiles/blob/master/tensorflow/v1.4.0-nvcr/Dockerfile.tf18.03_ssh
-
     Use equal sign "=" for arguments, do not separate by space.
 
-    Typical usage examples:
-        salloc -N 2 -p some_queue  # salloc -N 2 -p hsw_v100
-        srun srun_docker.sh --script=./hvd_example_script.sh \\
-            --container="nvcr.io/nvidian/sae/avolkov:tf1.8.0py3_cuda9.0_cudnn7_nccl2.2.13_hvd_ompi3_ibverbs"
-        # another call undersubsribe GPUs
-        srun srun_docker.sh --script=./hvd_example_script.sh --slots_per_node=2 \\
-            --container="nvcr.io/nvidian/sae/avolkov:tf1.8.0py3_cuda9.0_cudnn7_nccl2.2.13_hvd_ompi3_ibverbs"
+    SLURM srun launcher script to orchestrate multinode singularity jobs.
+    This script orchestrates multinode jobs with ability to invoke MPI internally
+    to the singularity container. This is achieved by running the singularity
+    containers as services. Refer to:
+        https://www.sylabs.io/guides/2.6/user-guide/running_services.html
+
+    Typical MPI usage model with singularity is to call mpirun from outside the
+    container:
+        https://www.sylabs.io/guides/2.6/user-guide/faq.html#why-do-we-call-mpirun-from-outside-the-container-rather-than-inside
+    But it is possible to setup mpirun from within the container as well. This
+    script does the "within" approach. Main benefit is that one does not have
+    to install/setup MPI outside of the container which can be burdensome and
+    complicated.
+
+    The singularity container needs to be built with multinode capabilities.
+    Typically this requires an ssh server and client to be installed in the
+    container. Example:
+        https://github.com/avolkov1/shared_dockerfiles/blob/master/tensorflow/v1.4.0-nvcr/Dockerfile.tf18.03_ssh
+
+    The dockerfile example needs to be converted to singularity by either
+    docker2singularity utility or rewrite as singularity recipe/def file.
 
     Prerequisites for this script:
         1. SLURM - This script is specifically written to be run in SLURM.
         2. ~/.ssh/config - Setup with options for compute nodes. Refer to README.
             This is important. Also requires a customized sshd_config.
             Refer to README.
-        3. run_dock_asuser.sh - Download this script and add it to the path.
-            Recommended place: ~/bin/run_dock_asuser.sh
-            https://github.com/avolkov1/helper_scripts_for_containers/blob/master/run_dock_asuser.sh
+        3. Singularity 3.x+ is required.
+
+    Typical usage examples:
+        salloc -N 2 -p some_queue  # salloc -N 2 -p hsw_v100
+        srun srun_singularity.sh \\
+            --script=./hvd_example_script.sh \\
+            --container=/cm/shared/singularity/tf1.8.0py3.simg
 
     Convenience environment variables are injected into the container. Use
     these in the script.
@@ -75,20 +87,25 @@ Usage: $(basename $0) [-h|--help]
         ENVLIST - If the --envlist option is used the ENVLIST variable is just
             a list of the environment variables. Refer to --envlist option desc.
 
-    --dockname - Name to use when launching container.
-        Default: ${dockname}
+    Within the script the mpirun/pdsh/parallel command typically needs to set
+    additional environment variables. Do not assumer workers have these set. Ex:
+        mpirun -x LD_LIBRARY_PATH -x PATH -x SHELL \\
+            -H $hostlist -np $np <remaining options and command>
 
-    --container - Docker container tag/url. Required parameter.
+    Additional gotchas. If the singularity job is killed or ends in an unexpected
+    fashion one might have to manually cleanup files in "/var/run/singularity/instances"
+    This is a bug of singularity with its instance feature.
+
+    --iname - Name to use when launching container.
+        Default: ${iname}
+
+    --container - Singularity container file/url whatever is legal for start command:
+            singularity instance start --help
+        Required parameter.
 
     --datamnts - Data directory(s) to mount into the container. Comma separated.
         Ex: "--datamnts=/datasets,/scratch" would map "/datasets:/datasets"
         and "/scratch:/scratch" in the container.
-
-    --privileged - This option is typically necessary for RDMA. Refer to
-        run_dock_asuser --help for more information about this option. With
-        some containers seems to cause network issues so disabled by default.
-        Nvidia docker ignores NV_GPU and NVIDIA_VISIBLE_DEVICES when run with
-        privileged option. Use CUDA_VISIBLE_DEVICES to mask CUDA processes.
 
     --slots_per_node - When formulating the hostlist array specify slots per
         node. Typically with multigpu jobs 1 slot per GPU so then slots per
@@ -103,7 +120,7 @@ Usage: $(basename $0) [-h|--help]
         salloc -N 3 -p dgx-1v
         # assume SLURM_NODELIST=dgx[01-03]
         # We want to run on dgx02 and dgx03 but not dgx01.
-        srun -N 2 --exclude=dgx01 srun_docker.sh --nodelist=dgx[02-03] ...
+        srun -N 2 --exclude=dgx01 srun_singularity.sh --nodelist=dgx[02-03] ...
 
     --script - Specify a script to run. Specify script with full or relative
         paths (relative to current working directory). Ex.:
@@ -124,7 +141,7 @@ Usage: $(basename $0) [-h|--help]
         to be available in the master node. Example:
             export MYVAR1=myvar1
             export MYVAR2=myvar2
-            srun srun_docker.sh \\
+            srun srun_singularity.sh \\
                 --container=<some_container> \\
                 --script=<some_script> \\
                 --envlist=MYVAR1,MYVAR2
@@ -140,14 +157,15 @@ Usage: $(basename $0) [-h|--help]
 
             mpirun $evars ...
 
-    --dockopts - Additional docker options not covered above. These are passed
-        to the docker service session. Use quotes to keep the additional
-        options together. Example:
-            --dockopts="--ipc=host -e MYVAR=SOMEVALUE -v /datasets:/data"
-        The "--ipc=host" can be used for MPS with nvidia-docker2. Any
-        additional docker option that is not exposed above can be set through
-        this option. In the example the "/datasets" is mapped to "/data" in the
+    --singopts - Additional singularity options not covered above. These are
+        passed to the singularity service session. Use quotes to keep the
+        additional options together. Example:
+            --sigopts="-B /datasets:/data"
+        In the example the "/datasets" is mapped to "/data" in the
         container instead of using "--datamnts".
+        Options that are always set are --nv and --cleanenv. For additional
+        options refer to:
+            singularity instance start --help
 
     --script_help - Pass --help to script.
 
@@ -159,7 +177,6 @@ Usage: $(basename $0) [-h|--help]
 
 EOF
 }
-
 
 remain_args=()
 
@@ -173,9 +190,8 @@ while getopts ":h-" arg; do
         OPTARG=$(echo $_OPTION | cut -d'=' -f2)
         OPTION=$(echo $_OPTION | cut -d'=' -f1)
         case $OPTION in
-        --dockname ) larguments=yes; dockname="$OPTARG"  ;;
+        --iname ) larguments=yes; iname="$OPTARG"  ;;
         --container ) larguments=yes; container="$OPTARG"  ;;
-        --privileged ) larguments=no; privileged=true  ;;
         --datamnts ) larguments=yes; datamnts="$OPTARG"  ;;
         --envlist ) larguments=yes; envlist="$OPTARG"  ;;
         --slots_per_node ) larguments=yes; slots_per_node="$OPTARG"  ;;
@@ -184,8 +200,8 @@ while getopts ":h-" arg; do
         --script_help ) larguments=no; script_help=true  ;;
         --sshconfigdir ) larguments=yes; sshconfigdir="$OPTARG"  ;;
         --sshdport ) larguments=yes; sshdport="$OPTARG"  ;;
-        --dockopts ) larguments=yes;
-            dockopts="$( cut -d '=' -f 2- <<< "$_OPTION" )";  ;;
+        --singopts ) larguments=yes;
+            singopts="$( cut -d '=' -f 2- <<< "$_OPTION" )";  ;;
         --help ) usage; exit 2 ;;
         --* ) remain_args+=($_OPTION) ;;
         esac
@@ -212,7 +228,6 @@ remain_args+=($@)
 
 if [ "$script_help" = true ] ; then
     remain_args+=("--help")
-
 fi
 
 export remainargs="$(join_by : ${remain_args[@]})"
@@ -221,12 +236,12 @@ export remainargs="$(join_by : ${remain_args[@]})"
 
 procid=$SLURM_PROCID
 
-
-privilegedopt=''
-if [ "$privileged" = true ] ; then
-    privilegedopt="--privileged"
+mntdata=''
+if [ ! -z "${datamnts// }" ]; then
+    for mnt in ${datamnts//,/ } ; do
+        mntdata="-B ${mnt}:${mnt} ${mntdata}"
+    done
 fi
-
 
 if [ -z ${slots_per_node:+x} ]; then
     # ngpus_per_node=$(bash -c 'nvidia-smi -L | wc -l')
@@ -279,33 +294,33 @@ export NV_GPU="$(nvidia-smi -q | grep UUID | awk '{ print $4 }' | tr '\n' ',')"
 fi
 # echo NV_GPU: $NV_GPU
 
-envvars="sshconfigdir,sshdport,hostlist,scriptpath,remainargs,np"
-# additional environment variables to export
+
+# envvars=''
 if [ ! -z "${envlist// }" ]; then
-    export ENVLIST=$envlist
     for evar in ${envlist//,/ } ; do
-        envvars="${envvars},${evar}"
+        export SINGULARITYENV_${evar}=${!evar}
     done
-    envvars="${envvars},ENVLIST"
+    export SINGULARITYENV_ENVLIST="${envlist}"
 fi
 
-# echo DOCKOPTS: $dockopts
-function launch_dock_sess() {
-    # --privileged
-    run_dock_asuser.sh --dockname=${dockname} ${privilegedopt} --net=host \
-        --datamnts="${datamnts}" \
-        --envlist=${envvars} \
-        --container=${container} --daemon \
-        --dockopts="${dockopts}"
+# additional environment variables to export
+envstoexport="sshconfigdir,sshdport,hostlist,scriptpath,remainargs,np"
+for evar in ${envstoexport//,/ } ; do
+    export SINGULARITYENV_${evar}=${!evar}
+done
+
+
+function launch_sing_sess() {
+    singularity instance start --nv --cleanenv \
+        ${mntdata} ${singopts} ${container} ${iname}
 }
 
 if [ "$procid" -eq "0" ]; then
     echo Master $(hostname)
 
-    docker stop ${dockname} 2>&1 >/dev/null
-    docker rm ${dockname} 2>&1 >/dev/null
+    singularity instance stop -a 2>/dev/null
 
-    launch_dock_sess
+    launch_sing_sess
 
     # Verify all the worker nodes are up.
     for _host in ${workerhosts}; do
@@ -315,13 +330,15 @@ if [ "$procid" -eq "0" ]; then
         done
     done
 
-    docker exec ${dockname} bash -c '
+    singularity exec --cleanenv ${singopts} instance://${iname} bash -c '
     /usr/sbin/sshd -p $sshdport  -f ${sshconfigdir}/sshd_config
 
     # /usr/local/openmpi/bin/mpirun -mca btl_tcp_if_exclude docker0,lo \
     #     -np 2 -H $hostlist \
     #     hostname
 
+    # sleep 200
+    # printenv
     # echo remainargs: $remainargs
     # echo ${remainargs//:/ }
     ${scriptpath} ${remainargs//:/ }
@@ -331,8 +348,7 @@ if [ "$procid" -eq "0" ]; then
 
     '
 
-    docker stop ${dockname}
-    docker rm ${dockname}
+    singularity instance stop -a
 
     # Stop sshd in all the workers. This will force the workers to exit.
     for _host in ${workerhosts}; do
@@ -344,12 +360,12 @@ if [ "$procid" -eq "0" ]; then
 else
     echo Worker $(hostname)
 
-    docker stop ${dockname} 2>&1 >/dev/null
-    docker rm ${dockname} 2>&1 >/dev/null
+    singularity instance stop -a 2>/dev/null
 
-    launch_dock_sess
+    launch_sing_sess
 
-    docker exec ${dockname} bash -c '
+    singularity exec --cleanenv ${singopts} instance://${iname} bash -c '
+    # printenv
     # echo sshdport: $sshdport
     /usr/sbin/sshd -p $sshdport -f ${sshconfigdir}/sshd_config
 
@@ -360,7 +376,6 @@ else
     done
     '
 
-    docker stop ${dockname}
-    docker rm ${dockname}
+    singularity instance stop -a
 
 fi

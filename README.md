@@ -1,33 +1,42 @@
 
 # Table of Contents
--   [SLURM Multinode Docker Container Orchestration](#slurm-multinode-docker-container-orchestration)
+-   [SLURM Multinode Docker And Singularity Container Orchestration](#slurm-multinode-docker-and-singularity-container-orchestration)
     -   [User sshd config files for containers](#user-sshd-config-files-for-containers)
     -   [User ssh configuration](#user-ssh-configuration)
     -   [Setup helper script `run_dock_asuser`](#setup-helper-script-run_dock_asuser)
 -   [Building Containers with ssh for multinode capability](#building-containers-with-ssh-for-multinode-capability)
--   [Tensorflow multinode using Docker Containers](#tensorflow-multinode-using-docker-containers)
--   [PyTorch multinode using Docker Containers](#pytorch-multinode-using-docker-containers)
+-   [Running via Sigularity Containers](#running-via-sigularity-containers)
+-   [Tensorflow multinode using Containers](#tensorflow-multinode-using-containers)
+-   [PyTorch multinode using Containers](#pytorch-multinode-using-containers)
 -   [Advanced usage of `srun`](#advanced-usage-of-srun)
 
-### SLURM Multinode Docker Container Orchestration
+### SLURM Multinode Docker And Singularity Container Orchestration
 
-This repo provides examples and scripts to orchestrate docker containers that
-work across nodes. The docker options and session launcher boiler code is done
-via orchestration helper script: [`srun_docker.sh`](src/srun_docker.sh)
+This repo provides examples and scripts to orchestrate docker and singularity
+containers that work across nodes. The docker options and session launcher
+boiler code is done via orchestration helper script [`srun_docker.sh`](src/srun_docker.sh)
+and singularity is handled via [`srun_singularity.sh`](src/srun_singularity.sh).
 
 A typical interactive Slurm run looks like this:
 
 ``` bash
 salloc -N 2 -p <some_partition> # using two nodes
+
+# docker where --privileged option is for RDMA support
 srun srun_docker.sh \
     --container=<your_container> \
     --privileged \
+    --script=./<your_job_script>.sh
+
+# singularity (does not have or need --privileged option)
+srun srun_singularity.sh \
+    --container=<your_container> \
     --script=./<your_job_script>.sh
 ```
 
 *Procedure*
 
--   Srun (sbatch also works) the `srun_docker.sh` script on allocated nodes:
+-   Srun (sbatch also works) the `srun_docker.sh` or `srun_singularity.sh` script on allocated nodes:
     -   First node acts as the "master"/coordinator and "worker" node.
     -   Remaining nodes are worker nodes.
 -   Workers nodes
@@ -47,11 +56,25 @@ srun srun_docker.sh \
 There are numerous examples of the general idea of this approach such as:<br/>
 <https://github.com/uber/horovod/blob/master/docs/docker.md#running-on-multiple-machines>
 
-Most of these published examples run the containers as root. This makes it
+Most of these published examples run the docker containers as root. This makes it
 difficult for working with linux systems where user permissions are relied on
 for access to data and code. The `srun_docker.sh` script with the configuration
-described below orchestrates the containers to run with the users id and
+described below orchestrates the docker containers to run with the users id and
 privileges.
+
+In regards to singularity typical multinode and particularly MPI usage model
+with singularity is to call mpirun from outside the container:<br/>
+<https://www.sylabs.io/guides/2.6/user-guide/faq.html#why-do-we-call-mpirun-from-outside-the-container-rather-than-inside>
+
+But it is possible to setup mpirun from within the container as well. The
+`srun_singularity.sh` script does the "within" approach. Main benefit is that
+one does not have to install/setup MPI outside of the container which can be
+burdensome and complicates interoperability with MPI library within the container.
+
+Both docker and singularity approaches in such a manner require setting up user
+sshd and ssh configs as described below. The `run_dock_asuser` setup is only
+required for docker since singularity natively runs as user simplifying the
+setup compared to docker in this regard.
 
 ##### User sshd config files for containers
 
@@ -89,7 +112,7 @@ regenerated.
 
 The `HostKey` paths need to correspond to your home directory. The port needs to
 be set to match `~/.ssh/config` (more on port settings below), `PermitRootLogin`
-should be set to yes, and `StrictModes` set to no.
+should be set to yes, `StrictModes` set to no, and `UsePAM` set to no.
 
 ``` bash
 # CHANGE THIS IN sshd_config from avolkov to your username
@@ -213,7 +236,41 @@ Further references for multinode containers and setup:
     ${MOFED_DIR}/mlnxofedinstall --user-space-only --without-fw-update --all -q
     ```
 
-### Tensorflow multinode using Docker Containers
+### Running via Sigularity Containers
+
+Documentation about singularity can be found here:<br/>
+<https://www.sylabs.io/docs/>
+
+The examples below where docker containers are used, these same containers can
+be converted via utility `docker2singularity`. Refer to `docker2singularity`
+instructions here:<br/>
+<https://hub.docker.com/r/singularityware/docker2singularity/>
+
+Example for conversion:
+
+``` bash
+# Convert Tensorflow container
+docker pull nvcr.io/nvidian/sae/avolkov:tf1.8.0py3_cuda9.0_cudnn7_nccl2.2.13_hvd_ompi3_ibverbs
+
+docker run -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /cm/shared/singularity:/output \
+  --privileged -t --rm \
+  singularityware/docker2singularity:v2.6 \
+    nvcr.io/nvidian/sae/avolkov:tf1.8.0py3_cuda9.0_cudnn7_nccl2.2.13_hvd_ompi3_ibverbs
+
+# Convert PyTorch container
+docker pull nvcr.io/nvidian/sae/avolkov:pytorch_hvd_apex
+
+docker run -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /cm/shared/singularity:/output \
+  --privileged -t --rm \
+  singularityware/docker2singularity:v2.6 nvcr.io/nvidian/sae/avolkov:pytorch_hvd_apex
+```
+
+It is also possible to setup and use a singularity registry or just place the
+singularity images on some shared filesystem.
+
+### Tensorflow multinode using Containers
 
 There are a variety of examples on the internet for setting up multinode docker
 containerized Tensorflow workloads. Uber posted instructions for Horovod:<br/>
@@ -251,6 +308,12 @@ salloc -N 2 -p dgx-1v  # 2 nodes. Change -N to however many nodes you would like
 srun srun_docker.sh \
     --container=nvcr.io/nvidian/sae/avolkov:tf1.8.0py3_cuda9.0_cudnn7_nccl2.2.13_hvd_ompi3_ibverbs \
     --privileged \
+    --script=./tensorflow_mnode/hvd_mnist_example.sh
+
+# singularity very similar. The docker container converted to singularity via
+# docker2singularity and stored in a cluster shared directory /cm/shared/singularity/
+srun srun_singularity.sh \
+    --container=/cm/shared/singularity/tf1.8.0py3.simg \
     --script=./tensorflow_mnode/hvd_mnist_example.sh
 ```
 
@@ -311,15 +374,12 @@ slots (slots are typically mapped to GPUs) to use, etc. In the script when orche
 injected environment variables `hostlist` and `np` for convenience.
 
 ``` bash
-# If a different shell is used then don't set shell to bash.
-# to avoid warning: WARNING: local probe returned unhandled shell:unknown assuming bash
-export SHELL=/bin/bash
 
-mpirun -H $hostlist -x SHELL -np $np \
+mpirun -H $hostlist -np $np \
 # etc.
 ```
 
-### PyTorch multinode using Docker Containers
+### PyTorch multinode using Containers
 
 Running Horovod code with PyTorch is very similar to running with Tensorflow.
 The dockerfile
@@ -345,6 +405,11 @@ salloc -N 2 -p dgx-1v  # 2 nodes. Change -N to however many nodes you would like
 srun srun_docker.sh \
     --container=nvcr.io/nvidian/sae/avolkov:pytorch_hvd_apex \
     --privileged \
+    --script=./pytorch_mnode/pytorch_hvd_mnist_example.sh
+
+# using singularity
+srun srun_singularity.sh \
+    --container=/cm/shared/singularity/pytorch_hvd_apex.simg \
     --script=./pytorch_mnode/pytorch_hvd_mnist_example.sh
 ```
 
@@ -374,9 +439,9 @@ Two additional examples are provided:
 
 These examples demonstrate usage of `mpirun` to run non-MPI code. One could
 have used [`pdsh`](https://github.com/chaos/pdsh) instead to the same effect.
-The idea is to illustrate that `srun_docker.sh` is a dynamic and versatile
-wrapper for enabling one to run multinode containers in various scenarios
-on SLURM. Refer to the `pdsh` example for apex (which is not MPI based)
+The idea is to illustrate that `srun_docker.sh` and `srun_singularity.sh` are
+dynamic and versatile wrappers for enabling one to run multinode containers in
+various scenarios on SLURM. Refer to the `pdsh` example for apex (which is not MPI based)
 [`pytorch_apex_mnist_example_pdsh.sh`](pytorch_mnode/pytorch_apex_mnist_example_pdsh.sh).
 
 ### Advanced usage of `srun`
@@ -401,19 +466,27 @@ NV_GPU=2,3 srun srun_docker.sh \
 
 # Using a subset of GPUs with privileged option
 # Tensorflow MPI Horovod approach
-srun srun_docker.sh \
-    --slots_per_node=2  --dockopts="-e CUDA_VISIBLE_DEVICES=2,3" \
+CUDA_VISIBLE_DEVICES=2,3 srun srun_docker.sh \
+    --slots_per_node=2  --envlist=CUDA_VISIBLE_DEVICES \
     --privileged \
     --container=nvcr.io/nvidian/sae/avolkov:tf1.8.0py3_cuda9.0_cudnn7_nccl2.2.13_hvd_ompi3_ibverbs \
     --script=./tensorflow_mnode/hvd_mnist_example.sh
 
 # PyTorch Non-MPI approach
-srun srun_docker.sh \
-    --slots_per_node=2 --dockopts="-e CUDA_VISIBLE_DEVICES=2,3" \
+CUDA_VISIBLE_DEVICES=2,3 srun srun_docker.sh \
+    --slots_per_node=2 --envlist=CUDA_VISIBLE_DEVICES \
     --privileged \
     --container=nvcr.io/nvidian/sae/avolkov:pytorch_hvd_apex \
     --script=./pytorch_mnode/pytorch_apex_mnist_example_pdsh.sh --epochs=5
 ```
+
+The above `srun` variations would work with singularity as well, just use the
+`srun_singularity.sh` script, specify a singularity image/container, and ommit
+the `--privileged` option (it is not needed). The `NV_GPU` environment var is
+only for nvidia-docker. If using a resource manager for GPU reservations,
+such as gres under SLURM, singularity will adhere to the resources reserved,
+which is not guaranteed for docker hence the `NV_GPU` usage in the
+`srun_docker.sh` as a workaround.
 
 These examples are straightforward to convert to sbatch scripts. Example:
 
@@ -421,8 +494,13 @@ These examples are straightforward to convert to sbatch scripts. Example:
 sbatch -N 2 -p dgx-1v \
     --output="slurm-%j-pytorch_hvd_mnist.out" \
     --wrap=./pytorch_mnode/sbatch_pytorch.sh
+
+sbatch -N 2 -p dgx-1v \
+    --output="slurm-%j-pytorch_hvd_mnist.out" \
+    --wrap=./pytorch_mnode/sbatch_pytorch_singularity.sh
 ```
 
-Refer to the script [`sbatch_pytorch.sh`](pytorch_mnode/sbatch_pytorch.sh) for
-further details.
+Refer to the scripts [`sbatch_pytorch.sh`](pytorch_mnode/sbatch_pytorch.sh) and
+[`sbatch_pytorch_singularity.sh`](pytorch_mnode/sbatch_pytorch_singularity.sh)
+for sbatch example details.
 

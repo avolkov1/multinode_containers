@@ -8,6 +8,10 @@ srun srun_docker.sh \
     --privileged \
     --script=./pytorch_mnode/pytorch_dist_mnist_example.sh
 
+srun srun_singularity.sh \
+    --container=/cm/shared/singularity/pytorch_hvd_apex.simg \
+    --script=./pytorch_mnode/pytorch_dist_mnist_example.sh
+
 EOF
 }
 
@@ -18,6 +22,13 @@ function join_by { local IFS="$1"; shift; echo "$*"; }
 # to avoid warning:
 #   WARNING: local probe returned unhandled shell:unknown assuming bash
 export SHELL=/bin/bash
+
+evars=''
+if [ ! -z "${ENVLIST// }" ]; then
+    for evar in ${ENVLIST//,/ } ; do
+        evars="-x ${evar} ${evars}"
+    done
+fi
 
 # echo HOSTLIST: $hostlist
 # echo NP: $np
@@ -88,7 +99,8 @@ EOF
 chmod u+x ${LAUNCHSCRIPT}
 
 mpilaunchcmd=$(cat <<EOF
-mpirun -H $TORCH_HOSTLIST -mca btl_tcp_if_exclude docker0,lo,virbr0 \
+mpirun  -x LD_LIBRARY_PATH -x SHELL ${evars} -H $TORCH_HOSTLIST \
+    -mca btl_tcp_if_exclude docker0,lo,virbr0 \
     --report-bindings --bind-to none --map-by slot \
     -np $NNODES \
     ${LAUNCHSCRIPT}

@@ -43,6 +43,8 @@ sed -i "s|HostKey /etc/ssh/ssh_host_ed25519_key|HostKey ${HOME}/mpisshconfig/ssh
 sed -i 's|PermitRootLogin prohibit-password|PermitRootLogin yes|' ${MPISSHCONFIG}/sshd_config
 sed -i 's|StrictModes yes|StrictModes no|' ${MPISSHCONFIG}/sshd_config
 
+sed -i 's|UsePAM yes|UsePAM no|' ${MPISSHCONFIG}/sshd_config
+
 
 ls -l ${MPISSHCONFIG}
 echo COPY ${MPISSHCONFIG} TO HOME

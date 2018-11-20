@@ -8,6 +8,10 @@ srun srun_docker.sh \
     --privileged \
     --script=./pytorch_mnode/pytorch_apex_mnist_example_pdsh.sh
 
+srun srun_singularity.sh \
+    --container=/cm/shared/singularity/pytorch_hvd_apex.simg \
+    --script=./pytorch_mnode/pytorch_apex_mnist_example_pdsh.sh
+
 EOF
 }
 
@@ -18,6 +22,14 @@ function join_by { local IFS="$1"; shift; echo "$*"; }
 # to avoid warning:
 #   WARNING: local probe returned unhandled shell:unknown assuming bash
 export SHELL=/bin/bash
+
+evars=''
+if [ ! -z "${ENVLIST// }" ]; then
+    for evar in ${ENVLIST//,/ } ; do
+        evars="${evar}=${!evar} ${evars}"
+    done
+fi
+# echo EVARS: ${evars}
 
 # echo HOSTLIST: $hostlist
 # echo NP: $np
@@ -64,6 +76,8 @@ export NODE_RANK=\$1
 export NCCL_SOCKET_IFNAME=^docker0,virbr0
 export NCCL_IB_DISABLE=1
 
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+
 if [ -e /opt/conda/bin/activate ]; then
     source /opt/conda/bin/activate
 fi
@@ -86,7 +100,7 @@ EOF
 chmod u+x ${LAUNCHSCRIPT}
 
 pdshlaunchcmd=$(cat <<EOF
-PDSH_RCMD_TYPE=ssh pdsh -w $TORCH_HOSTLIST ${LAUNCHSCRIPT} %n
+PDSH_RCMD_TYPE=ssh pdsh -w $TORCH_HOSTLIST ${evars} ${LAUNCHSCRIPT} %n
 EOF
 )
 echo RUNNING: $pdshlaunchcmd
