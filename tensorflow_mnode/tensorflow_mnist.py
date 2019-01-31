@@ -123,7 +123,8 @@ def main(_):
     # Horovod: add Horovod Distributed Optimizer.
     opt = hvd.DistributedOptimizer(opt)
 
-    global_step = tf.contrib.framework.get_or_create_global_step()
+    # global_step = tf.contrib.framework.get_or_create_global_step()
+    global_step = tf.train.get_or_create_global_step()
     train_op = opt.minimize(loss, global_step=global_step)
 
     hooks = [
