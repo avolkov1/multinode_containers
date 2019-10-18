@@ -73,7 +73,7 @@ export NODE_RANK=\$1
 # echo NODE_RANK: \$NODE_RANK
 
 # would be nice to get RDMA and infiniband working
-export NCCL_SOCKET_IFNAME=^docker0,virbr0
+export NCCL_SOCKET_IFNAME=^docker0,virbr0,lo,ib0
 export NCCL_IB_DISABLE=1
 
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH

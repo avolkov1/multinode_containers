@@ -94,6 +94,7 @@ Usage: $(basename $0) [-h|--help]
 
     Additional gotchas. If the singularity job is killed or ends in an unexpected
     fashion one might have to manually cleanup files in "/var/run/singularity/instances"
+    or in "<homedir>/.singularity/instances"
     This is a bug of singularity with its instance feature.
 
     --iname - Name to use when launching container.

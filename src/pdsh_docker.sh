@@ -21,6 +21,8 @@ envlist=""
 
 privileged=false
 
+ibdevices=false
+
 dockopts=''
 
 datamnts=""
@@ -43,9 +45,11 @@ sshdport=12345
 usage() {
 cat <<EOF
 Usage: $(basename $0) [-h|--help]
-    [--dockname=name] [--container=docker-container] [--datamnts=dir1,dir2,...]
+    [--dockname=name] [--container=docker-container]
+    [--datamnts=dir1,dir2,...] [--envlist]
     [--privileged] [--dockopts="--someopt1=opt1 --someopt2=opt2"]
     [--slots_per_node=somenum]
+    [--ibdevices]
     [--script=scriptpath] [--<remain_args>]
 
     PDSH launcher script to orchestrate multinode docker jobs. The docker
@@ -161,6 +165,11 @@ Usage: $(basename $0) [-h|--help]
 
             mpirun $evars ...
 
+    --ibdevices - Add options "--cap-add=IPC_LOCK --device=/dev/infiniband" to
+        docker launch command options. This will mount your Mellanox devices
+        (/dev/infiniband) in the container and enable the IPC_LOCK capability
+        for memory registration.
+
     --dockopts - Additional docker options not covered above. These are passed
         to the docker service session. Use quotes to keep the additional
         options together. Example:
@@ -197,6 +206,7 @@ while getopts ":h-" arg; do
         --dockname ) larguments=yes; dockname="$OPTARG"  ;;
         --container ) larguments=yes; container="$OPTARG"  ;;
         --privileged ) larguments=no; privileged=true  ;;
+        --ibdevices ) larguments=no; ibdevices=true  ;;
         --datamnts ) larguments=yes; datamnts="$OPTARG"  ;;
         --envlist ) larguments=yes; envlist="$OPTARG"  ;;
         --slots_per_node ) larguments=yes; slots_per_node="$OPTARG"  ;;
@@ -250,6 +260,10 @@ procid=$noderank
 privilegedopt=''
 if [ "$privileged" = true ] ; then
     privilegedopt="--privileged"
+fi
+
+if [ "$ibdevices" = true ] ; then
+    dockopts="${dockopts} --cap-add=IPC_LOCK --device=/dev/infiniband"
 fi
 
 
