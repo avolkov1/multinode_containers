@@ -25,13 +25,13 @@ export NODES=$nodes
 PDSH_RCMD_TYPE=ssh PDSH_SSH_ARGS_APPEND="-p 22" pdsh -w $NODES NODES=$NODES \
     pdsh_docker.sh --noderank=%n \
         --container=nvcr.io/nvidian/sae/avolkov:pytorch_hvd_apex \
-        --privileged \
+        --ibdevices \
         --script=./pytorch_mnode/pytorch_hvd_mnist_example.sh \
         --workingdir=${PWD}
 
 srun srun_docker.sh \
     --container=nvcr.io/nvidian/sae/avolkov:pytorch_hvd_apex \
-    --privileged \
+    --ibdevices \
     --script=./pytorch_mnode/pytorch_hvd_mnist_example.sh
 
 srun srun_singularity.sh \

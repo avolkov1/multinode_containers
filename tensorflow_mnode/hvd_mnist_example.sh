@@ -32,7 +32,7 @@ PDSH_RCMD_TYPE=ssh PDSH_SSH_ARGS_APPEND="-p 22" pdsh -w $NODES NODES=$NODES PATH
         --script=./tensorflow_mnode/hvd_mnist_example.sh \
         --workingdir=${PWD}
 
-# salloc needs to be done prio to srun commands.
+# salloc needs to be done prior to srun commands.
 salloc -N 2 -p some-partition
 
 srun srun_docker.sh \
