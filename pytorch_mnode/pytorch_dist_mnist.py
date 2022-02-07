@@ -38,6 +38,34 @@ def to_python_float(t):
         return t[0]
 
 
+def get_mnist_dataset(datadir, train=True, download=False):
+    return datasets.MNIST(
+        datadir, train=True, download=True,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.1307,), (0.3081,))
+        ]))
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.conv2_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 10)
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = x.view(-1, 320)
+        x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
+
+
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
@@ -126,23 +154,13 @@ def main():
 
     global_rank = dist.get_rank()
     if global_rank == 0:
-        train_dataset = datasets.MNIST(
-            DATADIR, train=True, download=True,
-            transform=transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
-            ]))
+        train_dataset = get_mnist_dataset(DATADIR, train=True, download=True)
 
     # Barrier
     dist.all_reduce(torch.tensor(0).cuda(), op=dist.reduce_op.SUM)
 
     if global_rank != 0:
-        train_dataset = datasets.MNIST(
-            DATADIR, train=True, download=False,
-            transform=transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize((0.1307,), (0.3081,))
-            ]))
+        train_dataset = get_mnist_dataset(DATADIR, train=True, download=False)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -159,31 +177,9 @@ def main():
 
     # =====END:   ADDED FOR DISTRIBUTED======
 
-    test_loader = torch.utils.data.DataLoader(datasets.MNIST(
-        DATADIR, train=False,
-        transform=transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
-        ])),
+    test_loader = torch.utils.data.DataLoader(
+        get_mnist_dataset(DATADIR, train=False, download=False),
         batch_size=args.test_batch_size, shuffle=True, **kwargs)
-
-    class Net(nn.Module):
-        def __init__(self):
-            super(Net, self).__init__()
-            self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-            self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-            self.conv2_drop = nn.Dropout2d()
-            self.fc1 = nn.Linear(320, 50)
-            self.fc2 = nn.Linear(50, 10)
-
-        def forward(self, x):
-            x = F.relu(F.max_pool2d(self.conv1(x), 2))
-            x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-            x = x.view(-1, 320)
-            x = F.relu(self.fc1(x))
-            x = F.dropout(x, training=self.training)
-            x = self.fc2(x)
-            return F.log_softmax(x, dim=1)
 
     model = Net()
     if args.cuda:
